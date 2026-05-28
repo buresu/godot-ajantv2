@@ -49,6 +49,10 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Install Linux dependencies
+        if: matrix.os == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y libudev-dev
+
       - name: Configure CMake
         run: cmake -B build ${{ matrix.cmake_args }} -DCMAKE_BUILD_TYPE=Debug
 
