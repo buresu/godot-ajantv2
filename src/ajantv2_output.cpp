@@ -157,11 +157,11 @@ bool AJAOutput::open(int p_device, int p_channel, int64_t p_video_format) {
     // FrameStore → CSC (RGB→YCbCr) → SDI output
     _card.Connect(::GetCSCInputXptFromChannel(channel),
                   ::GetFrameStoreOutputXptFromChannel(channel));
-    _card.Connect(::GetSDIOutputInputXptFromChannel(channel),
+    _card.Connect(::GetSDIOutputInputXpt(channel),
                   ::GetCSCOutputXptFromChannel(channel, false, false));
   } else {
     // FrameStore → SDI output (raw YCbCr)
-    _card.Connect(::GetSDIOutputInputXptFromChannel(channel),
+    _card.Connect(::GetSDIOutputInputXpt(channel),
                   ::GetFrameStoreOutputXptFromChannel(channel));
   }
 
@@ -490,7 +490,7 @@ String AJAOutput::_get_video_format_hint_string() const {
   Ref<AJADevice> device = aja ? aja->get_device(_device) : Ref<AJADevice>();
   if (device.is_null()) {
     return "1080p59.94:" +
-           String::num_int64((int64_t)NTV2_FORMAT_1080p_5994);
+           String::num_int64((int64_t)NTV2_FORMAT_1080p_5994_B);
   }
 
   const Array formats = device->get_video_formats();
@@ -503,13 +503,13 @@ String AJAOutput::_get_video_format_hint_string() const {
              String::num_int64((int64_t)fmt.get("height", 0));
     }
     name = name.replace(",", " ").replace(":", " ");
-    const int64_t id = fmt.get("id", (int64_t)NTV2_FORMAT_1080p_5994);
+    const int64_t id = fmt.get("id", (int64_t)NTV2_FORMAT_1080p_5994_B);
     if (!hint.is_empty()) {
       hint += ",";
     }
     hint += name + ":" + String::num_int64(id);
   }
   return hint.is_empty()
-             ? "1080p59.94:" + String::num_int64((int64_t)NTV2_FORMAT_1080p_5994)
+             ? "1080p59.94:" + String::num_int64((int64_t)NTV2_FORMAT_1080p_5994_B)
              : hint;
 }

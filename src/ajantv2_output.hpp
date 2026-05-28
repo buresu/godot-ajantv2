@@ -60,7 +60,7 @@ private:
   CNTV2Card _card;
   int _device = 0;
   int _channel = 0;
-  NTV2VideoFormat _video_format = NTV2_FORMAT_1080p_5994;
+  NTV2VideoFormat _video_format = NTV2_FORMAT_1080p_5994_B;
   NTV2PixelFormat _pixel_format = NTV2_FBF_ABGR;
   int _width = 0;
   int _height = 0;

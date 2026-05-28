@@ -120,7 +120,6 @@ bool AJAInput::open(int p_device, int p_channel, int64_t p_video_format) {
     return false;
   }
 
-  _card.GetTaskMode(_card.GetTaskMode());
   if (!_card.AcquireStreamForApplication(aja::kAppSignature,
                                          int32_t(AJAProcess::GetPid()))) {
     UtilityFunctions::printerr("[AJAInput] Could not acquire device ",
