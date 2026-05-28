@@ -13,6 +13,12 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
+# GDExtensions must use the release CRT (/MD) on all configurations so that all
+# linked libraries agree on a single runtime — godot-cpp enforces this too.
+if(MSVC)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL" CACHE STRING "" FORCE)
+endif()
+
 if(CMAKE_GENERATOR_PLATFORM MATCHES "arm64|aarch64|ARM64" OR CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64|ARM64")
     set(ARCH "arm64")
 elseif(CMAKE_SIZEOF_VOID_P EQUAL 8)
