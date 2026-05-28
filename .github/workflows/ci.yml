@@ -53,6 +53,10 @@ jobs:
         if: matrix.os == 'linux'
         run: sudo apt-get update && sudo apt-get install -y libudev-dev
 
+      - name: Install macOS dependencies
+        if: matrix.os == 'macos'
+        run: brew install jpeg
+
       - name: Configure CMake
         run: cmake -B build ${{ matrix.cmake_args }} -DCMAKE_BUILD_TYPE=Debug
 
