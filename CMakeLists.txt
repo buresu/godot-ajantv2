@@ -27,6 +27,18 @@ add_subdirectory("${PROJECT_SOURCE_DIR}/lib/godot-cpp")
 # libyuv
 add_subdirectory("${PROJECT_SOURCE_DIR}/lib/libyuv" EXCLUDE_FROM_ALL)
 
+# CMake >= 4.0 sets CMAKE_OSX_SYSROOT to "" by default, which breaks libajantv2's
+# CMakeOptions.cmake (requires a full SDK path to parse the version). Fix: aja-video/libajantv2#60
+if(APPLE AND NOT CMAKE_OSX_SYSROOT)
+    execute_process(
+        COMMAND xcrun --sdk macosx --show-sdk-path
+        OUTPUT_VARIABLE CMAKE_OSX_SYSROOT
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    set(CMAKE_OSX_SYSROOT "${CMAKE_OSX_SYSROOT}" CACHE STRING "macOS SDK path" FORCE)
+endif()
+
 # libajantv2 (disable everything we don't need)
 set(AJANTV2_DISABLE_DEMOS ON CACHE BOOL "" FORCE)
 set(AJANTV2_DISABLE_DRIVER ON CACHE BOOL "" FORCE)
