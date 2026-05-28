@@ -1,0 +1,9 @@
+[submodule "lib/godot-cpp"]
+	path = lib/godot-cpp
+	url = https://github.com/godotengine/godot-cpp.git
+[submodule "lib/libyuv"]
+	path = lib/libyuv
+	url = https://chromium.googlesource.com/libyuv/libyuv
+[submodule "lib/libajantv2"]
+	path = lib/libajantv2
+	url = https://github.com/aja-video/libajantv2.git
