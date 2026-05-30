@@ -1,5 +1,10 @@
 cmake_minimum_required(VERSION 3.15)
 
+# GDExtensions must use the release CRT (/MD) on all configurations so that all
+# linked libraries agree on a single runtime — godot-cpp enforces this too.
+cmake_policy(SET CMP0091 NEW)
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL" CACHE STRING "" FORCE)
+
 project(godot-ajantv2 VERSION 0.1.0 LANGUAGES C CXX)
 
 if(NOT CMAKE_BUILD_TYPE)
@@ -12,12 +17,6 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
-
-# GDExtensions must use the release CRT (/MD) on all configurations so that all
-# linked libraries agree on a single runtime — godot-cpp enforces this too.
-if(MSVC)
-    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL" CACHE STRING "" FORCE)
-endif()
 
 if(CMAKE_GENERATOR_PLATFORM MATCHES "arm64|aarch64|ARM64" OR CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64|ARM64")
     set(ARCH "arm64")
@@ -55,10 +54,25 @@ set(AJANTV2_DISABLE_PLUGIN_LOAD ON CACHE BOOL "" FORCE)
 set(LIBAJANTV2_DIR "${PROJECT_SOURCE_DIR}/lib/libajantv2")
 add_subdirectory("${PROJECT_SOURCE_DIR}/lib/libajantv2" EXCLUDE_FROM_ALL)
 
+if(MSVC AND TARGET ajantv2)
+    foreach(_defs_property IN ITEMS COMPILE_DEFINITIONS INTERFACE_COMPILE_DEFINITIONS)
+        get_target_property(_ajantv2_defs ajantv2 ${_defs_property})
+        if(_ajantv2_defs)
+            list(REMOVE_ITEM _ajantv2_defs AJA_DEBUG _DEBUG -DAJA_DEBUG -D_DEBUG)
+            set_target_properties(ajantv2 PROPERTIES ${_defs_property} "${_ajantv2_defs}")
+        endif()
+    endforeach()
+    target_compile_options(ajantv2 PRIVATE /UAJA_DEBUG /U_DEBUG)
+endif()
+
 file(GLOB_RECURSE INCLUDES CONFIGURE_DEPENDS "src/*.hpp")
 file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS "src/*.cpp")
 
 add_library(GodotAJANTV2 SHARED ${SOURCES} ${INCLUDES})
+
+if(MSVC)
+    target_compile_options(GodotAJANTV2 PRIVATE /UAJA_DEBUG /U_DEBUG)
+endif()
 
 set_target_properties(GodotAJANTV2 PROPERTIES
     PREFIX "lib"
