@@ -1,6 +1,20 @@
-[gd_scene load_steps=3 format=3 uid="uid://ajantv2demo"]
+[gd_scene load_steps=7 format=3 uid="uid://ajantv2demo"]
 
 [ext_resource type="Script" path="res://scripts/ajantv2_demo.gd" id="1_demo"]
+
+[sub_resource type="ViewportTexture" id="ViewportTexture_output"]
+viewport_path = NodePath("OutputViewport")
+
+[sub_resource type="BoxMesh" id="BoxMesh_output"]
+size = Vector3(1.8, 1.8, 1.8)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_output"]
+albedo_color = Color(0.12, 0.72, 1, 1)
+roughness = 0.36
+metallic = 0.15
+
+[sub_resource type="PlaneMesh" id="PlaneMesh_output_floor"]
+size = Vector2(5, 5)
 
 [node name="AJADemo" type="Control"]
 layout_mode = 3
@@ -12,3 +26,31 @@ script = ExtResource("1_demo")
 [node name="AJAInput" type="AJAInput" parent="."]
 
 [node name="AJAOutput" type="AJAOutput" parent="."]
+texture = SubResource("ViewportTexture_output")
+
+[node name="OutputViewport" type="SubViewport" parent="."]
+size = Vector2i(1920, 1080)
+render_target_update_mode = 4
+
+[node name="OutputScene" type="Node3D" parent="OutputViewport"]
+
+[node name="Primitive" type="MeshInstance3D" parent="OutputViewport/OutputScene"]
+transform = Transform3D(0.866025, 0, -0.5, 0.12941, 0.965926, 0.224144, 0.482963, -0.258819, 0.836516, 0, 0.35, 0)
+mesh = SubResource("BoxMesh_output")
+material_override = SubResource("StandardMaterial3D_output")
+
+[node name="Floor" type="MeshInstance3D" parent="OutputViewport/OutputScene"]
+transform = Transform3D(1, 0, 0, 0, -4.37114e-08, 1, 0, -1, -4.37114e-08, 0, -1.05, 0)
+mesh = SubResource("PlaneMesh_output_floor")
+
+[node name="KeyLight" type="DirectionalLight3D" parent="OutputViewport/OutputScene"]
+transform = Transform3D(0.707107, -0.353553, 0.612372, 0, 0.866025, 0.5, -0.707107, -0.353553, 0.612372, 0, 4, 2)
+light_energy = 2.2
+
+[node name="FillLight" type="OmniLight3D" parent="OutputViewport/OutputScene"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -2.5, 2.5, 3)
+light_energy = 1.2
+
+[node name="Camera3D" type="Camera3D" parent="OutputViewport/OutputScene"]
+transform = Transform3D(1, 0, 0, 0, 0.92388, 0.382683, 0, -0.382683, 0.92388, 0, 1.15, 5)
+current = true

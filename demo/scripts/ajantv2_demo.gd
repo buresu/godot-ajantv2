@@ -5,8 +5,9 @@ var _input: AJAInput
 var _output: AJAOutput
 
 var _preview_texture: ImageTexture
-var _output_pattern_texture: ImageTexture
-var _output_frame := 0
+var _output_viewport: SubViewport
+var _output_viewport_texture: Texture2D
+var _output_primitive: Node3D
 
 var _device_select: OptionButton
 var _input_channel_select: OptionButton
@@ -19,12 +20,15 @@ var _status_label: Label
 var _preview: TextureRect
 var _device_info: TextEdit
 
-const OUTPUT_FPS := 30.0
-var _output_time := 0.0
+const OUTPUT_ROTATION_SPEED := Vector3(0.45, 0.8, 0.2)
 
 func _ready() -> void:
 	_input = get_node_or_null("AJAInput")
 	_output = get_node_or_null("AJAOutput")
+	_output_viewport = get_node_or_null("OutputViewport")
+	_output_primitive = get_node_or_null("OutputViewport/OutputScene/Primitive")
+	if _output_viewport != null:
+		_output_viewport_texture = _output_viewport.get_texture()
 	_build_ui()
 	if Engine.has_singleton("AJAVideoSystems"):
 		_aja = Engine.get_singleton("AJAVideoSystems")
@@ -35,12 +39,8 @@ func _exit_tree() -> void:
 	_stop_output()
 
 func _process(delta: float) -> void:
-	if _output != null and _output.is_enabled():
-		_output_time += delta
-		var interval := 1.0 / OUTPUT_FPS
-		while _output_time >= interval:
-			_output_time -= interval
-			_update_output_pattern()
+	if _output_primitive != null:
+		_output_primitive.rotation += OUTPUT_ROTATION_SPEED * delta
 
 func _build_ui() -> void:
 	var root := VBoxContainer.new()
@@ -101,7 +101,7 @@ func _build_ui() -> void:
 	action_row.add_child(_input_button)
 
 	_output_button = Button.new()
-	_output_button.text = "Start Output Pattern"
+	_output_button.text = "Start Output Scene"
 	_output_button.pressed.connect(_toggle_output)
 	action_row.add_child(_output_button)
 
@@ -132,7 +132,8 @@ func _refresh_devices() -> void:
 	_preview_texture = null
 	if _input != null:
 		_input.set_texture(null)
-	_output_pattern_texture = null
+	if _output != null:
+		_output.set_texture(null)
 
 	_device_select.clear()
 	_device_info.text = ""
@@ -273,58 +274,18 @@ func _toggle_output() -> void:
 	_output.enabled = true
 
 	if _output.is_open():
-		_output_button.text = "Stop Output Pattern"
-		_output_time = 0.0
-		_output_frame = 0
-		_output_pattern_texture = null
-		_update_output_pattern()
-		_status_label.text = "Output pattern started on Ch %d (%dx%d)" % [
+		var output_size := Vector2i(_output.get_width(), _output.get_height())
+		if _output_viewport != null and output_size.x > 0 and output_size.y > 0:
+			_output_viewport.size = output_size
+			_output_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+			_output_viewport_texture = _output_viewport.get_texture()
+		_output.set_texture(_output_viewport_texture)
+		_preview.texture = _output_viewport_texture
+		_output_button.text = "Stop Output Scene"
+		_status_label.text = "Output scene started on Ch %d (%dx%d)" % [
 			channel + 1, _output.get_width(), _output.get_height()]
 	else:
 		_status_label.text = "Output failed to open"
-
-func _update_output_pattern() -> void:
-	if _output == null or not _output.is_open():
-		return
-	var w: int = _output.get_width()
-	var h: int = _output.get_height()
-	if w <= 0 or h <= 0:
-		return
-	var image := _create_pattern_image(w, h)
-	if _output_pattern_texture == null or _output_pattern_texture.get_width() != w or _output_pattern_texture.get_height() != h:
-		_output_pattern_texture = ImageTexture.create_from_image(image)
-		_output.set_texture(_output_pattern_texture)
-	else:
-		_output_pattern_texture.update(image)
-	_output_frame += 3
-
-func _create_pattern_image(width: int, height: int) -> Image:
-	var data := PackedByteArray()
-	data.resize(width * height * 4)
-	var stripe_width: int = max(1, width / 8)
-	var offset: int = _output_frame % max(1, width)
-	for y in height:
-		for x in width:
-			var band := int((x + offset) / stripe_width) % 8
-			var base := (y * width + x) * 4
-			_write_pattern_pixel(data, base, band, x, y)
-			data[base + 3] = 255
-	return Image.create_from_data(width, height, false, Image.FORMAT_RGBA8, data)
-
-func _write_pattern_pixel(data: PackedByteArray, base: int, band: int, x: int, y: int) -> void:
-	var r := 0; var g := 0; var b := 0
-	match band:
-		0: r = 255; g = 255; b = 255
-		1: r = 255; g = 255
-		2: g = 255; b = 255
-		3: g = 255
-		4: r = 255; b = 255
-		5: r = 255
-		6: b = 255
-	var marker := ((x / 32) + (y / 32) + (_output_frame / 12)) % 2
-	if marker != 0:
-		r = int(r * 0.75); g = int(g * 0.75); b = int(b * 0.75)
-	data[base + 0] = r; data[base + 1] = g; data[base + 2] = b
 
 func _stop_input() -> void:
 	if _input != null:
@@ -337,9 +298,8 @@ func _stop_output() -> void:
 	if _output != null:
 		_output.enabled = false
 		_output.set_texture(null)
-	_output_pattern_texture = null
 	if _output_button != null:
-		_output_button.text = "Start Output Pattern"
+		_output_button.text = "Start Output Scene"
 
 func _set_controls_enabled(enabled: bool) -> void:
 	_device_select.disabled = not enabled
