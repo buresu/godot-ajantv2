@@ -23,7 +23,8 @@ public:
   void _exit_tree() override;
   void _validate_property(PropertyInfo &p_property) const;
 
-  bool open(int p_device, int p_channel, int64_t p_video_format);
+  bool open(int p_device, int p_channel, int64_t p_video_format,
+            int64_t p_pixel_format = aja::PIXEL_FORMAT_AUTO);
   void close();
   bool is_open() const;
 
@@ -35,6 +36,9 @@ public:
   void set_channel(int p_channel);
   int64_t get_video_format() const;
   void set_video_format(int64_t p_video_format);
+  int64_t get_pixel_format() const;
+  void set_pixel_format(int64_t p_pixel_format);
+  int64_t get_active_pixel_format() const;
   Ref<Texture2D> get_texture() const;
   void set_texture(Ref<Texture2D> p_texture);
   int get_width() const;
@@ -56,12 +60,14 @@ private:
   String _get_device_hint_string() const;
   String _get_channel_hint_string() const;
   String _get_video_format_hint_string() const;
+  String _get_pixel_format_hint_string() const;
 
   CNTV2Card _card;
   int _device = 0;
   int _channel = 0;
   NTV2VideoFormat _video_format = NTV2_FORMAT_1080p_5994_B;
-  NTV2PixelFormat _pixel_format = NTV2_FBF_ABGR;
+  int64_t _pixel_format = aja::PIXEL_FORMAT_AUTO;
+  NTV2PixelFormat _active_pixel_format = NTV2_FBF_INVALID;
   int _width = 0;
   int _height = 0;
   bool _open = false;

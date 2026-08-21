@@ -6,12 +6,19 @@
 #include <ntv2formatdescriptor.h>
 #include <ntv2utils.h>
 
+#include <godot_cpp/core/binder_common.hpp>
 #include <godot_cpp/variant/string.hpp>
 
 #include <string>
 
 namespace godot {
 namespace aja {
+
+enum PixelFormat {
+  PIXEL_FORMAT_AUTO = -1,
+  PIXEL_FORMAT_8BIT_YCBCR = NTV2_FBF_8BIT_YCBCR,
+  PIXEL_FORMAT_ABGR = NTV2_FBF_ABGR,
+};
 
 // App signature used when acquiring exclusive device access.
 // 'GAJA' = Godot AJA
@@ -36,3 +43,5 @@ inline NTV2InputSource channel_to_input_source(NTV2Channel p_channel) {
 
 } // namespace aja
 } // namespace godot
+
+VARIANT_ENUM_CAST(godot::aja::PixelFormat);

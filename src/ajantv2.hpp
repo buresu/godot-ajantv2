@@ -16,6 +16,12 @@ class AJAVideoSystems : public Object {
   GDCLASS(AJAVideoSystems, Object)
 
 public:
+  using PixelFormat = aja::PixelFormat;
+  static constexpr PixelFormat PIXEL_FORMAT_AUTO = aja::PIXEL_FORMAT_AUTO;
+  static constexpr PixelFormat PIXEL_FORMAT_8BIT_YCBCR =
+      aja::PIXEL_FORMAT_8BIT_YCBCR;
+  static constexpr PixelFormat PIXEL_FORMAT_ABGR = aja::PIXEL_FORMAT_ABGR;
+
   static AJAVideoSystems *get_singleton();
 
   AJAVideoSystems();
@@ -26,6 +32,7 @@ public:
   Array get_devices() const;
   Ref<AJADevice> get_device(int p_index) const;
   Array get_video_formats(int p_device_index) const;
+  Array get_pixel_formats(int p_device_index) const;
 
 protected:
   static void _bind_methods();

@@ -1,56 +1,56 @@
-[gd_scene load_steps=7 format=3 uid="uid://ajantv2demo"]
+[gd_scene format=3 uid="uid://jantv2demo"]
 
-[ext_resource type="Script" path="res://scripts/ajantv2_demo.gd" id="1_demo"]
+[ext_resource type="Script" uid="uid://t8rco5t52ul2" path="res://scripts/ajantv2_demo.gd" id="1_demo"]
+[ext_resource type="Texture2D" uid="uid://cxoqvabgideuj" path="res://textures/new_viewport_texture.tres" id="2_fes43"]
 
-[sub_resource type="ViewportTexture" id="ViewportTexture_output"]
-viewport_path = NodePath("OutputViewport")
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_output"]
+albedo_color = Color(0.12, 0.72, 1, 1)
+metallic = 0.15
+roughness = 0.36
 
 [sub_resource type="BoxMesh" id="BoxMesh_output"]
 size = Vector3(1.8, 1.8, 1.8)
 
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_output"]
-albedo_color = Color(0.12, 0.72, 1, 1)
-roughness = 0.36
-metallic = 0.15
-
 [sub_resource type="PlaneMesh" id="PlaneMesh_output_floor"]
 size = Vector2(5, 5)
 
-[node name="AJADemo" type="Control"]
+[node name="AJADemo" type="Control" unique_id=1878689663]
 layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
 script = ExtResource("1_demo")
 
-[node name="AJAInput" type="AJAInput" parent="."]
+[node name="AJAInput" type="AJAInput" parent="." unique_id=2115811961]
 
-[node name="AJAOutput" type="AJAOutput" parent="."]
-texture = SubResource("ViewportTexture_output")
+[node name="AJAOutput" type="AJAOutput" parent="." unique_id=39864858]
+texture = ExtResource("2_fes43")
 
-[node name="OutputViewport" type="SubViewport" parent="."]
+[node name="OutputViewport" type="SubViewport" parent="." unique_id=1656189941]
 size = Vector2i(1920, 1080)
 render_target_update_mode = 4
 
-[node name="OutputScene" type="Node3D" parent="OutputViewport"]
+[node name="OutputScene" type="Node3D" parent="OutputViewport" unique_id=196903024]
 
-[node name="Primitive" type="MeshInstance3D" parent="OutputViewport/OutputScene"]
+[node name="Primitive" type="MeshInstance3D" parent="OutputViewport/OutputScene" unique_id=2006927641]
 transform = Transform3D(0.866025, 0, -0.5, 0.12941, 0.965926, 0.224144, 0.482963, -0.258819, 0.836516, 0, 0.35, 0)
-mesh = SubResource("BoxMesh_output")
 material_override = SubResource("StandardMaterial3D_output")
+mesh = SubResource("BoxMesh_output")
 
-[node name="Floor" type="MeshInstance3D" parent="OutputViewport/OutputScene"]
+[node name="Floor" type="MeshInstance3D" parent="OutputViewport/OutputScene" unique_id=723246912]
 transform = Transform3D(1, 0, 0, 0, -4.37114e-08, 1, 0, -1, -4.37114e-08, 0, -1.05, 0)
 mesh = SubResource("PlaneMesh_output_floor")
 
-[node name="KeyLight" type="DirectionalLight3D" parent="OutputViewport/OutputScene"]
+[node name="KeyLight" type="DirectionalLight3D" parent="OutputViewport/OutputScene" unique_id=1666907511]
 transform = Transform3D(0.707107, -0.353553, 0.612372, 0, 0.866025, 0.5, -0.707107, -0.353553, 0.612372, 0, 4, 2)
 light_energy = 2.2
 
-[node name="FillLight" type="OmniLight3D" parent="OutputViewport/OutputScene"]
+[node name="FillLight" type="OmniLight3D" parent="OutputViewport/OutputScene" unique_id=1931826892]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -2.5, 2.5, 3)
 light_energy = 1.2
 
-[node name="Camera3D" type="Camera3D" parent="OutputViewport/OutputScene"]
+[node name="Camera3D" type="Camera3D" parent="OutputViewport/OutputScene" unique_id=494768297]
 transform = Transform3D(1, 0, 0, 0, 0.92388, 0.382683, 0, -0.382683, 0.92388, 0, 1.15, 5)
 current = true

@@ -13,6 +13,7 @@ var _device_select: OptionButton
 var _input_channel_select: OptionButton
 var _output_channel_select: OptionButton
 var _output_format_select: OptionButton
+var _output_pixel_format_select: OptionButton
 var _refresh_button: Button
 var _input_button: Button
 var _output_button: Button
@@ -82,6 +83,7 @@ func _build_ui() -> void:
 	channel_row.add_child(out_lbl)
 	_output_channel_select = OptionButton.new()
 	_output_channel_select.custom_minimum_size = Vector2(120, 0)
+	_output_channel_select.item_selected.connect(_on_output_channel_selected)
 	channel_row.add_child(_output_channel_select)
 
 	var fmt_lbl := Label.new()
@@ -90,6 +92,13 @@ func _build_ui() -> void:
 	_output_format_select = OptionButton.new()
 	_output_format_select.custom_minimum_size = Vector2(240, 0)
 	channel_row.add_child(_output_format_select)
+
+	var pixel_fmt_lbl := Label.new()
+	pixel_fmt_lbl.text = "Pixel Format:"
+	channel_row.add_child(pixel_fmt_lbl)
+	_output_pixel_format_select = OptionButton.new()
+	_output_pixel_format_select.custom_minimum_size = Vector2(190, 0)
+	channel_row.add_child(_output_pixel_format_select)
 
 	var action_row := HBoxContainer.new()
 	action_row.add_theme_constant_override("separation", 8)
@@ -132,9 +141,6 @@ func _refresh_devices() -> void:
 	_preview_texture = null
 	if _input != null:
 		_input.set_texture(null)
-	if _output != null:
-		_output.set_texture(null)
-
 	_device_select.clear()
 	_device_info.text = ""
 
@@ -159,6 +165,7 @@ func _refresh_devices() -> void:
 		_input_channel_select.clear()
 		_output_channel_select.clear()
 		_output_format_select.clear()
+		_output_pixel_format_select.clear()
 		return
 
 	_device_select.select(0)
@@ -182,6 +189,7 @@ func _load_info_for_selected_device() -> void:
 	_fill_channel_select(_input_channel_select, device.get_num_video_inputs())
 	_fill_channel_select(_output_channel_select, device.get_num_video_outputs())
 	_fill_format_select(_output_format_select, device.get_video_formats())
+	_fill_pixel_format_select(device)
 
 	var lines: Array[String] = []
 	lines.append("Device: %s" % device.get_display_name())
@@ -191,7 +199,18 @@ func _load_info_for_selected_device() -> void:
 	lines.append("Can capture: %s" % str(device.can_capture()))
 	lines.append("Can playback: %s" % str(device.can_playback()))
 	lines.append("Video formats: %d" % _output_format_select.item_count)
+	lines.append("Output pixel formats: %d" % max(0, _output_pixel_format_select.item_count - 1))
 	_device_info.text = "\n".join(lines)
+
+func _on_output_channel_selected(_index: int) -> void:
+	if _output != null and _output.is_enabled():
+		_stop_output()
+	var device_index := _selected_device_index()
+	if device_index < 0 or _aja == null:
+		return
+	var device = _aja.get_device(device_index)
+	if device != null:
+		_fill_pixel_format_select(device)
 
 func _fill_channel_select(select: OptionButton, count: int) -> void:
 	select.clear()
@@ -215,6 +234,20 @@ func _fill_format_select(select: OptionButton, formats: Array) -> void:
 	select.disabled = formats.is_empty()
 	if not formats.is_empty():
 		select.select(0)
+
+func _fill_pixel_format_select(device) -> void:
+	_output_pixel_format_select.clear()
+	_output_pixel_format_select.add_item("Auto (prefer ABGR)")
+	_output_pixel_format_select.set_item_metadata(0, AJAVideoSystems.PIXEL_FORMAT_AUTO)
+	var channel := _selected_channel(_output_channel_select)
+	for pixel_format in device.get_pixel_formats():
+		var id := int(pixel_format.get("id", AJAVideoSystems.PIXEL_FORMAT_AUTO))
+		if not device.can_output_pixel_format(channel, id):
+			continue
+		_output_pixel_format_select.add_item(str(pixel_format.get("name", "")))
+		_output_pixel_format_select.set_item_metadata(
+			_output_pixel_format_select.item_count - 1, id)
+	_output_pixel_format_select.select(0)
 
 func _toggle_input() -> void:
 	if _input != null and _input.is_enabled():
@@ -260,6 +293,7 @@ func _toggle_output() -> void:
 	var device_index := _selected_device_index()
 	var channel := _selected_channel(_output_channel_select)
 	var fmt := _selected_format(_output_format_select)
+	var pixel_format := _selected_format(_output_pixel_format_select)
 	if device_index < 0 or fmt == 0:
 		_status_label.text = "Select an output device and format"
 		return
@@ -271,6 +305,7 @@ func _toggle_output() -> void:
 	_output.device = device_index
 	_output.channel = channel
 	_output.video_format = fmt
+	_output.pixel_format = pixel_format
 	_output.enabled = true
 
 	if _output.is_open():
@@ -279,11 +314,11 @@ func _toggle_output() -> void:
 			_output_viewport.size = output_size
 			_output_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 			_output_viewport_texture = _output_viewport.get_texture()
-		_output.set_texture(_output_viewport_texture)
 		_preview.texture = _output_viewport_texture
 		_output_button.text = "Stop Output Scene"
-		_status_label.text = "Output scene started on Ch %d (%dx%d)" % [
-			channel + 1, _output.get_width(), _output.get_height()]
+		_status_label.text = "Output scene started on Ch %d (%dx%d, %s)" % [
+			channel + 1, _output.get_width(), _output.get_height(),
+			_pixel_format_name(_output.get_active_pixel_format())]
 	else:
 		_status_label.text = "Output failed to open"
 
@@ -297,7 +332,6 @@ func _stop_input() -> void:
 func _stop_output() -> void:
 	if _output != null:
 		_output.enabled = false
-		_output.set_texture(null)
 	if _output_button != null:
 		_output_button.text = "Start Output Scene"
 
@@ -327,3 +361,12 @@ func _selected_format(select: OptionButton) -> int:
 func _device_label(device: Dictionary) -> String:
 	var n := str(device.get("display_name", ""))
 	return n if not n.is_empty() else str(device.get("model_name", "AJA Device"))
+
+func _pixel_format_name(pixel_format: int) -> String:
+	match pixel_format:
+		AJAVideoSystems.PIXEL_FORMAT_8BIT_YCBCR:
+			return "8-bit YCbCr (UYVY)"
+		AJAVideoSystems.PIXEL_FORMAT_ABGR:
+			return "ABGR"
+		_:
+			return "Unknown"

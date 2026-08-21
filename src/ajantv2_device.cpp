@@ -25,6 +25,11 @@ void AJADevice::_bind_methods() {
   ClassDB::bind_method(D_METHOD("to_dictionary"), &AJADevice::to_dictionary);
   ClassDB::bind_method(D_METHOD("get_video_formats"),
                        &AJADevice::get_video_formats);
+  ClassDB::bind_method(D_METHOD("get_pixel_formats"),
+                       &AJADevice::get_pixel_formats);
+  ClassDB::bind_method(
+      D_METHOD("can_output_pixel_format", "channel", "pixel_format"),
+      &AJADevice::can_output_pixel_format);
 }
 
 void AJADevice::setup(ULWord p_device_index) {
@@ -41,6 +46,10 @@ void AJADevice::setup(ULWord p_device_index) {
   _num_video_outputs = (int)card.features().GetNumVideoOutputs();
   _can_capture = card.features().CanDoCapture();
   _can_playback = card.features().CanDoPlayback();
+  _supports_8bit_ycbcr =
+      card.features().CanDoFrameBufferFormat(NTV2_FBF_8BIT_YCBCR);
+  _supports_abgr = card.features().CanDoFrameBufferFormat(NTV2_FBF_ABGR);
+  _num_cscs = (int)card.features().GetNumCSCs();
 
   // Enumerate supported video formats
   NTV2VideoFormatSet formats;
@@ -84,3 +93,35 @@ Dictionary AJADevice::to_dictionary() const {
 }
 
 Array AJADevice::get_video_formats() const { return _video_formats; }
+
+Array AJADevice::get_pixel_formats() const {
+  Array formats;
+  if (_supports_8bit_ycbcr) {
+    Dictionary ycbcr;
+    ycbcr["id"] = (int64_t)NTV2_FBF_8BIT_YCBCR;
+    ycbcr["name"] = "8-bit YCbCr (UYVY)";
+    formats.push_back(ycbcr);
+  }
+  if (_supports_abgr) {
+    Dictionary abgr;
+    abgr["id"] = (int64_t)NTV2_FBF_ABGR;
+    abgr["name"] = "ABGR";
+    formats.push_back(abgr);
+  }
+  return formats;
+}
+
+bool AJADevice::can_output_pixel_format(int p_channel,
+                                        int64_t p_pixel_format) const {
+  if (p_pixel_format == aja::PIXEL_FORMAT_AUTO) {
+    return _supports_8bit_ycbcr ||
+           (_supports_abgr && p_channel >= 0 && p_channel < _num_cscs);
+  }
+  if (p_pixel_format == aja::PIXEL_FORMAT_8BIT_YCBCR) {
+    return _supports_8bit_ycbcr;
+  }
+  if (p_pixel_format == aja::PIXEL_FORMAT_ABGR) {
+    return _supports_abgr && p_channel >= 0 && p_channel < _num_cscs;
+  }
+  return false;
+}

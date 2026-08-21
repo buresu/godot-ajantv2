@@ -30,6 +30,12 @@ void AJAVideoSystems::_bind_methods() {
                        &AJAVideoSystems::get_device);
   ClassDB::bind_method(D_METHOD("get_video_formats", "device_index"),
                        &AJAVideoSystems::get_video_formats);
+  ClassDB::bind_method(D_METHOD("get_pixel_formats", "device_index"),
+                       &AJAVideoSystems::get_pixel_formats);
+
+  BIND_ENUM_CONSTANT(PIXEL_FORMAT_AUTO);
+  BIND_ENUM_CONSTANT(PIXEL_FORMAT_8BIT_YCBCR);
+  BIND_ENUM_CONSTANT(PIXEL_FORMAT_ABGR);
 }
 
 void AJAVideoSystems::_clear_devices() { _devices.clear(); }
@@ -71,4 +77,9 @@ Ref<AJADevice> AJAVideoSystems::get_device(int p_index) const {
 Array AJAVideoSystems::get_video_formats(int p_device_index) const {
   Ref<AJADevice> device = get_device(p_device_index);
   return device.is_valid() ? device->get_video_formats() : Array();
+}
+
+Array AJAVideoSystems::get_pixel_formats(int p_device_index) const {
+  Ref<AJADevice> device = get_device(p_device_index);
+  return device.is_valid() ? device->get_pixel_formats() : Array();
 }

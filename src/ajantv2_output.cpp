@@ -25,8 +25,9 @@ AJAOutput::~AJAOutput() {
 }
 
 void AJAOutput::_bind_methods() {
-  ClassDB::bind_method(D_METHOD("open", "device", "channel", "video_format"),
-                       &AJAOutput::open);
+  ClassDB::bind_method(
+      D_METHOD("open", "device", "channel", "video_format", "pixel_format"),
+      &AJAOutput::open, DEFVAL((int64_t)aja::PIXEL_FORMAT_AUTO));
   ClassDB::bind_method(D_METHOD("close"), &AJAOutput::close);
   ClassDB::bind_method(D_METHOD("is_open"), &AJAOutput::is_open);
   ClassDB::bind_method(D_METHOD("is_enabled"), &AJAOutput::is_enabled);
@@ -42,6 +43,12 @@ void AJAOutput::_bind_methods() {
                        &AJAOutput::get_video_format);
   ClassDB::bind_method(D_METHOD("set_video_format", "video_format"),
                        &AJAOutput::set_video_format);
+  ClassDB::bind_method(D_METHOD("get_pixel_format"),
+                       &AJAOutput::get_pixel_format);
+  ClassDB::bind_method(D_METHOD("set_pixel_format", "pixel_format"),
+                       &AJAOutput::set_pixel_format);
+  ClassDB::bind_method(D_METHOD("get_active_pixel_format"),
+                       &AJAOutput::get_active_pixel_format);
   ClassDB::bind_method(D_METHOD("get_texture"), &AJAOutput::get_texture);
   ClassDB::bind_method(D_METHOD("set_texture", "texture"),
                        &AJAOutput::set_texture);
@@ -63,6 +70,9 @@ void AJAOutput::_bind_methods() {
   ClassDB::add_property("AJAOutput",
                         {Variant::INT, "video_format", PROPERTY_HINT_ENUM},
                         "set_video_format", "get_video_format");
+  ClassDB::add_property("AJAOutput",
+                        {Variant::INT, "pixel_format", PROPERTY_HINT_ENUM},
+                        "set_pixel_format", "get_pixel_format");
 }
 
 void AJAOutput::_ready() {
@@ -87,14 +97,19 @@ void AJAOutput::_validate_property(PropertyInfo &p_property) const {
   } else if (name == "video_format") {
     p_property.hint = PROPERTY_HINT_ENUM;
     p_property.hint_string = _get_video_format_hint_string();
+  } else if (name == "pixel_format") {
+    p_property.hint = PROPERTY_HINT_ENUM;
+    p_property.hint_string = _get_pixel_format_hint_string();
   }
 }
 
-bool AJAOutput::open(int p_device, int p_channel, int64_t p_video_format) {
+bool AJAOutput::open(int p_device, int p_channel, int64_t p_video_format,
+                     int64_t p_pixel_format) {
   close();
   _device = p_device;
   _channel = p_channel;
   _video_format = (NTV2VideoFormat)p_video_format;
+  _pixel_format = p_pixel_format;
 
   if (!CNTV2DeviceScanner::GetDeviceAtIndex((ULWord)p_device, _card)) {
     UtilityFunctions::printerr("[AJAOutput] Could not open device ", p_device);
@@ -125,10 +140,48 @@ bool AJAOutput::open(int p_device, int p_channel, int64_t p_video_format) {
 
   const NTV2Channel channel = aja::index_to_channel(_channel);
 
-  // Choose pixel format: ABGR (=Godot RGBA8 in memory, needs CSC for SDI)
-  // or fall back to UYVY.
+  const bool supports_abgr =
+      _card.features().CanDoFrameBufferFormat(NTV2_FBF_ABGR);
+  const bool supports_ycbcr =
+      _card.features().CanDoFrameBufferFormat(NTV2_FBF_8BIT_YCBCR);
   const bool has_csc = ((int)channel < (int)_card.features().GetNumCSCs());
-  _pixel_format = has_csc ? NTV2_FBF_ABGR : NTV2_FBF_8BIT_YCBCR;
+
+  if (_pixel_format == aja::PIXEL_FORMAT_AUTO) {
+    if (supports_abgr && has_csc) {
+      _active_pixel_format = NTV2_FBF_ABGR;
+    } else if (supports_ycbcr) {
+      _active_pixel_format = NTV2_FBF_8BIT_YCBCR;
+    } else {
+      UtilityFunctions::printerr(
+          "[AJAOutput] Device does not support an available output pixel "
+          "format");
+      close();
+      return false;
+    }
+  } else if (_pixel_format == aja::PIXEL_FORMAT_ABGR) {
+    if (!supports_abgr || !has_csc) {
+      UtilityFunctions::printerr(
+          "[AJAOutput] ABGR output requires device ABGR support and a CSC "
+          "for channel ",
+          _channel);
+      close();
+      return false;
+    }
+    _active_pixel_format = NTV2_FBF_ABGR;
+  } else if (_pixel_format == aja::PIXEL_FORMAT_8BIT_YCBCR) {
+    if (!supports_ycbcr) {
+      UtilityFunctions::printerr(
+          "[AJAOutput] Device does not support 8-bit YCbCr output");
+      close();
+      return false;
+    }
+    _active_pixel_format = NTV2_FBF_8BIT_YCBCR;
+  } else {
+    UtilityFunctions::printerr("[AJAOutput] Unsupported pixel format ",
+                               _pixel_format);
+    close();
+    return false;
+  }
 
   // Validate video format.
   if (!_card.features().CanDoVideoFormat(_video_format)) {
@@ -139,30 +192,42 @@ bool AJAOutput::open(int p_device, int p_channel, int64_t p_video_format) {
     return false;
   }
 
-  NTV2FormatDescriptor fd(_video_format, _pixel_format);
+  NTV2FormatDescriptor fd(_video_format, _active_pixel_format);
   _width = (int)fd.GetRasterWidth();
   _height = (int)fd.GetRasterHeight();
 
   _card.DisableChannel(channel);
   _card.SetVANCMode(NTV2_VANCMODE_OFF, channel);
   _card.SetVideoFormat(_video_format, false, false, channel);
-  _card.SetFrameBufferFormat(channel, _pixel_format);
+  _card.SetFrameBufferFormat(channel, _active_pixel_format);
   _card.EnableChannel(channel);
   _card.SubscribeOutputVerticalEvent(channel);
   _card.SetReference(NTV2_REFERENCE_FREERUN);
 
   // Set up signal routing.
   _card.ClearRouting();
-  if (_pixel_format == NTV2_FBF_ABGR) {
-    // FrameStore → CSC (RGB→YCbCr) → SDI output
-    _card.Connect(::GetCSCInputXptFromChannel(channel),
-                  ::GetFrameStoreOutputXptFromChannel(channel));
-    _card.Connect(::GetSDIOutputInputXpt(channel),
-                  ::GetCSCOutputXptFromChannel(channel, false, false));
-  } else {
-    // FrameStore → SDI output (raw YCbCr)
-    _card.Connect(::GetSDIOutputInputXpt(channel),
-                  ::GetFrameStoreOutputXptFromChannel(channel));
+
+  const bool is_rgb = (_active_pixel_format == NTV2_FBF_ABGR);
+  const NTV2OutputXptID frame_store_output =
+      ::GetFrameStoreOutputXptFromChannel(channel, is_rgb, false);
+  NTV2OutputXptID video_output = frame_store_output;
+
+  if (is_rgb) {
+    // FrameStore RGB -> CSC (RGB to YCbCr) -> device outputs.
+    _card.Connect(::GetCSCInputXptFromChannel(channel), frame_store_output);
+    video_output = ::GetCSCOutputXptFromChannel(channel, false, false);
+  }
+
+  // Route to the selected SDI output.
+  _card.Connect(::GetSDIOutputInputXpt(channel), video_output);
+
+  // HDMI output is a separate destination and must be routed explicitly.
+  // Route the active channel's output to each available HDMI output.
+  const ULWord num_hdmi = _card.features().GetNumHDMIVideoOutputs();
+  for (ULWord i = 0; i < num_hdmi; i++) {
+    _card.Connect(::GetOutputDestInputXpt(
+                      NTV2OutputDestination(NTV2_OUTPUTDESTINATION_HDMI1 + i)),
+                  video_output);
   }
 
   // Initialise AutoCirculate for output (3 device frame buffers, no audio).
@@ -205,6 +270,7 @@ void AJAOutput::close() {
   }
 
   _open = false;
+  _active_pixel_format = NTV2_FBF_INVALID;
   _width = 0;
   _height = 0;
 }
@@ -216,7 +282,8 @@ bool AJAOutput::is_enabled() const { return _enabled; }
 void AJAOutput::set_enabled(bool p_enabled) {
   _enabled = p_enabled;
   if (_enabled) {
-    if (!_open && !open(_device, _channel, (int64_t)_video_format)) {
+    if (!_open &&
+        !open(_device, _channel, (int64_t)_video_format, _pixel_format)) {
       _enabled = false;
       return;
     }
@@ -246,6 +313,7 @@ void AJAOutput::set_channel(int p_channel) {
     return;
   }
   _channel = p_channel;
+  notify_property_list_changed();
   _restart_if_enabled();
 }
 
@@ -260,11 +328,24 @@ void AJAOutput::set_video_format(int64_t p_video_format) {
   _restart_if_enabled();
 }
 
+int64_t AJAOutput::get_pixel_format() const { return _pixel_format; }
+
+void AJAOutput::set_pixel_format(int64_t p_pixel_format) {
+  if (_pixel_format == p_pixel_format) {
+    return;
+  }
+  _pixel_format = p_pixel_format;
+  _restart_if_enabled();
+}
+
+int64_t AJAOutput::get_active_pixel_format() const {
+  return _open ? (int64_t)_active_pixel_format
+               : (int64_t)aja::PIXEL_FORMAT_AUTO;
+}
+
 Ref<Texture2D> AJAOutput::get_texture() const { return _texture; }
 
-void AJAOutput::set_texture(Ref<Texture2D> p_texture) {
-  _texture = p_texture;
-}
+void AJAOutput::set_texture(Ref<Texture2D> p_texture) { _texture = p_texture; }
 
 int AJAOutput::get_width() const { return _width; }
 
@@ -331,8 +412,20 @@ void AJAOutput::_output_thread_loop() {
 
   AUTOCIRCULATE_TRANSFER xfer;
   PackedByteArray transfer_buf;
-  const int bytes_per_pixel = (_pixel_format == NTV2_FBF_ABGR) ? 4 : 2;
+  const int bytes_per_pixel = (_active_pixel_format == NTV2_FBF_ABGR) ? 4 : 2;
   transfer_buf.resize(_width * _height * bytes_per_pixel);
+
+  // Initialize to format-appropriate black so early frames are clean.
+  if (_active_pixel_format == NTV2_FBF_8BIT_YCBCR) {
+    uint8_t *p = reinterpret_cast<uint8_t *>(transfer_buf.ptrw());
+    const int n = _width * _height;
+    for (int i = 0; i < n; i++) {
+      p[i * 2 + 0] = 0x80; // U/V = 128 (neutral chroma)
+      p[i * 2 + 1] = 0x10; // Y = 16 (black in limited range)
+    }
+  }
+  // ABGR: resize() zeroes the buffer; zero ABGR = transparent black → black via
+  // CSC.
 
   if (!_card.AutoCirculateStart(channel)) {
     UtilityFunctions::printerr("[AJAOutput] AutoCirculateStart failed");
@@ -355,34 +448,32 @@ void AJAOutput::_output_thread_loop() {
 
       if (!rgba.is_empty() && rgba.size() >= _width * _height * 4) {
         const uint8_t *src = rgba.ptr();
-        uint8_t *dst =
-            reinterpret_cast<uint8_t *>(transfer_buf.ptrw());
-        bool ok = false;
+        uint8_t *dst = reinterpret_cast<uint8_t *>(transfer_buf.ptrw());
 
-        if (_pixel_format == NTV2_FBF_ABGR) {
-          // Godot RGBA8 = memory R,G,B,A = AJA ABGR. Direct copy.
+        if (_active_pixel_format == NTV2_FBF_ABGR) {
+          // Godot RGBA8 (libyuv ABGR) = AJA ABGR. Direct copy.
           memcpy(dst, src, (size_t)(_width * _height * 4));
-          ok = true;
         } else {
           // Godot RGBA8 (libyuv ABGR) → ARGB (libyuv) → UYVY
           PackedByteArray argb;
           argb.resize(_width * _height * 4);
           uint8_t *argb_ptr = argb.ptrw();
-          ok =
-              libyuv::ABGRToARGB(src, _width * 4, argb_ptr, _width * 4, _width,
-                                 _height) == 0 &&
+          if (libyuv::ABGRToARGB(src, _width * 4, argb_ptr, _width * 4, _width,
+                                 _height) != 0 ||
               libyuv::ARGBToUYVY(argb_ptr, _width * 4, dst, _width * 2, _width,
-                                 _height) == 0;
+                                 _height) != 0) {
+            // Conversion failed; keep previous buffer (last good frame or
+            // black).
+          }
         }
-
-        if (ok) {
-          xfer.SetVideoBuffer(reinterpret_cast<PULWord>(transfer_buf.ptrw()),
-                              (ULWord)transfer_buf.size());
-          _card.AutoCirculateTransfer(channel, xfer);
-        }
-      } else if (os) {
-        os->delay_usec(1000);
       }
+
+      // Always submit to prevent AutoCirculate underrun.
+      // If no new frame is ready, transfer_buf holds the last frame or initial
+      // black.
+      xfer.SetVideoBuffer(reinterpret_cast<PULWord>(transfer_buf.ptrw()),
+                          (ULWord)transfer_buf.size());
+      _card.AutoCirculateTransfer(channel, xfer);
     } else if (os) {
       os->delay_usec(1000);
     } else {
@@ -402,9 +493,9 @@ void AJAOutput::_start_output_thread() {
     _thread_stop_requested = false;
   }
   _output_thread.instantiate();
-  const Error err = _output_thread->start(
-      callable_mp(this, &AJAOutput::_output_thread_loop),
-      Thread::PRIORITY_HIGH);
+  const Error err =
+      _output_thread->start(callable_mp(this, &AJAOutput::_output_thread_loop),
+                            Thread::PRIORITY_HIGH);
   if (err != OK) {
     UtilityFunctions::printerr("[AJAOutput] Could not start output thread: ",
                                (int64_t)err);
@@ -437,7 +528,7 @@ void AJAOutput::_restart_if_enabled() {
   }
   _disconnect_frame_post_draw();
   close();
-  if (!open(_device, _channel, (int64_t)_video_format)) {
+  if (!open(_device, _channel, (int64_t)_video_format, _pixel_format)) {
     _enabled = false;
     return;
   }
@@ -489,8 +580,7 @@ String AJAOutput::_get_video_format_hint_string() const {
   AJAVideoSystems *aja = AJAVideoSystems::get_singleton();
   Ref<AJADevice> device = aja ? aja->get_device(_device) : Ref<AJADevice>();
   if (device.is_null()) {
-    return "1080p59.94:" +
-           String::num_int64((int64_t)NTV2_FORMAT_1080p_5994_B);
+    return "1080p59.94:" + String::num_int64((int64_t)NTV2_FORMAT_1080p_5994_B);
   }
 
   const Array formats = device->get_video_formats();
@@ -510,6 +600,33 @@ String AJAOutput::_get_video_format_hint_string() const {
     hint += name + ":" + String::num_int64(id);
   }
   return hint.is_empty()
-             ? "1080p59.94:" + String::num_int64((int64_t)NTV2_FORMAT_1080p_5994_B)
+             ? "1080p59.94:" +
+                   String::num_int64((int64_t)NTV2_FORMAT_1080p_5994_B)
              : hint;
+}
+
+String AJAOutput::_get_pixel_format_hint_string() const {
+  String hint = "Auto (prefer ABGR):" +
+                String::num_int64((int64_t)aja::PIXEL_FORMAT_AUTO);
+  AJAVideoSystems *aja = AJAVideoSystems::get_singleton();
+  Ref<AJADevice> device = aja ? aja->get_device(_device) : Ref<AJADevice>();
+  if (device.is_null()) {
+    hint += ",8-bit YCbCr (UYVY):" +
+            String::num_int64((int64_t)aja::PIXEL_FORMAT_8BIT_YCBCR);
+    hint += ",ABGR:" + String::num_int64((int64_t)aja::PIXEL_FORMAT_ABGR);
+    return hint;
+  }
+
+  const Array formats = device->get_pixel_formats();
+  for (int i = 0; i < formats.size(); ++i) {
+    const Dictionary format = formats[i];
+    const int64_t id = format.get("id", (int64_t)aja::PIXEL_FORMAT_AUTO);
+    if (!device->can_output_pixel_format(_channel, id)) {
+      continue;
+    }
+    String name = format.get("name", String());
+    name = name.replace(",", " ").replace(":", " ");
+    hint += "," + name + ":" + String::num_int64(id);
+  }
+  return hint;
 }

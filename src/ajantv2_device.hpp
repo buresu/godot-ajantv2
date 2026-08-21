@@ -27,6 +27,8 @@ public:
   bool can_playback() const;
   Dictionary to_dictionary() const;
   Array get_video_formats() const;
+  Array get_pixel_formats() const;
+  bool can_output_pixel_format(int p_channel, int64_t p_pixel_format) const;
 
 protected:
   static void _bind_methods();
@@ -39,6 +41,9 @@ private:
   int _num_video_outputs = 0;
   bool _can_capture = false;
   bool _can_playback = false;
+  bool _supports_8bit_ycbcr = false;
+  bool _supports_abgr = false;
+  int _num_cscs = 0;
   Array _video_formats;
 };
 
