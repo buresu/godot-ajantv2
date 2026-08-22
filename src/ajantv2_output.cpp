@@ -2,15 +2,17 @@
 
 #include <godot_cpp/classes/image.hpp>
 #include <godot_cpp/classes/os.hpp>
+#include <godot_cpp/classes/rd_texture_format.hpp>
+#include <godot_cpp/classes/rendering_device.hpp>
 #include <godot_cpp/classes/rendering_server.hpp>
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/core/mutex_lock.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
 
-#include <libyuv.h>
-
 #include <ajabase/system/process.h>
 #include <ntv2signalrouter.h>
+
+#include <utility>
 
 #include "ajantv2.hpp"
 
@@ -39,6 +41,12 @@ void AJAOutput::_bind_methods() {
   ClassDB::bind_method(D_METHOD("get_channel"), &AJAOutput::get_channel);
   ClassDB::bind_method(D_METHOD("set_channel", "channel"),
                        &AJAOutput::set_channel);
+  ClassDB::bind_method(D_METHOD("get_output_destination"),
+                       &AJAOutput::get_output_destination);
+  ClassDB::bind_method(D_METHOD("set_output_destination", "destination"),
+                       &AJAOutput::set_output_destination);
+  ClassDB::bind_method(D_METHOD("get_active_output_destination"),
+                       &AJAOutput::get_active_output_destination);
   ClassDB::bind_method(D_METHOD("get_video_format"),
                        &AJAOutput::get_video_format);
   ClassDB::bind_method(D_METHOD("set_video_format", "video_format"),
@@ -68,6 +76,9 @@ void AJAOutput::_bind_methods() {
                         {Variant::INT, "channel", PROPERTY_HINT_ENUM},
                         "set_channel", "get_channel");
   ClassDB::add_property("AJAOutput",
+                        {Variant::INT, "output_destination", PROPERTY_HINT_ENUM},
+                        "set_output_destination", "get_output_destination");
+  ClassDB::add_property("AJAOutput",
                         {Variant::INT, "video_format", PROPERTY_HINT_ENUM},
                         "set_video_format", "get_video_format");
   ClassDB::add_property("AJAOutput",
@@ -94,6 +105,9 @@ void AJAOutput::_validate_property(PropertyInfo &p_property) const {
   } else if (name == "channel") {
     p_property.hint = PROPERTY_HINT_ENUM;
     p_property.hint_string = _get_channel_hint_string();
+  } else if (name == "output_destination") {
+    p_property.hint = PROPERTY_HINT_ENUM;
+    p_property.hint_string = _get_output_destination_hint_string();
   } else if (name == "video_format") {
     p_property.hint = PROPERTY_HINT_ENUM;
     p_property.hint_string = _get_video_format_hint_string();
@@ -136,21 +150,78 @@ bool AJAOutput::open(int p_device, int p_channel, int64_t p_video_format,
     close();
     return false;
   }
+  _acquired = true;
   _card.SetTaskMode(NTV2_OEM_TASKS);
 
-  const NTV2Channel channel = aja::index_to_channel(_channel);
+  NTV2OutputDestinations supported_destinations;
+  NTV2DeviceGetSupportedOutputDests(_card.GetDeviceID(),
+                                    supported_destinations);
+  const bool automatic_destination =
+      _output_destination == aja::OUTPUT_DESTINATION_AUTO;
+  _active_output_destination =
+      automatic_destination
+          ? NTV2ChannelToOutputDestination(aja::index_to_channel(_channel))
+          : (NTV2OutputDestination)_output_destination;
+  if (automatic_destination &&
+      supported_destinations.find(_active_output_destination) ==
+          supported_destinations.end()) {
+    _active_output_destination = NTV2_OUTPUTDESTINATION_INVALID;
+    for (const NTV2OutputDestination destination : supported_destinations) {
+      if (NTV2_OUTPUT_DEST_IS_SDI(destination) ||
+          NTV2_OUTPUT_DEST_IS_HDMI(destination)) {
+        _active_output_destination = destination;
+        break;
+      }
+    }
+  }
+  if (!NTV2_IS_VALID_OUTPUT_DEST(_active_output_destination) ||
+      (!NTV2_OUTPUT_DEST_IS_SDI(_active_output_destination) &&
+       !NTV2_OUTPUT_DEST_IS_HDMI(_active_output_destination)) ||
+      supported_destinations.find(_active_output_destination) ==
+          supported_destinations.end()) {
+    UtilityFunctions::printerr("[AJAOutput] Device does not support output "
+                               "destination ",
+                               _output_destination);
+    close();
+    return false;
+  }
+
+  _active_channel =
+      NTV2OutputDestinationToChannel(_active_output_destination);
+  if ((int)_active_channel >= (int)_card.features().GetNumFrameStores()) {
+    UtilityFunctions::printerr(
+        "[AJAOutput] Output destination has no corresponding frame store");
+    close();
+    return false;
+  }
+
+  if (_card.features().CanDoMultiFormat()) {
+    _card.SetMultiFormatMode(true);
+  }
+  if (NTV2_OUTPUT_DEST_IS_SDI(_active_output_destination) &&
+      _card.features().HasBiDirectionalSDI()) {
+    _card.SetSDITransmitEnable(_active_channel, true);
+    _card.WaitForOutputVerticalInterrupt(NTV2_CHANNEL1, 10);
+  }
 
   const bool supports_abgr =
       _card.features().CanDoFrameBufferFormat(NTV2_FBF_ABGR);
-  const bool supports_ycbcr =
+  const bool supports_ycbcr8 =
       _card.features().CanDoFrameBufferFormat(NTV2_FBF_8BIT_YCBCR);
-  const bool has_csc = ((int)channel < (int)_card.features().GetNumCSCs());
+  const bool supports_ycbcr10 =
+      _card.features().CanDoFrameBufferFormat(NTV2_FBF_10BIT_YCBCR);
+  const bool has_csc =
+      ((int)_active_channel < (int)_card.features().GetNumCSCs());
 
   if (_pixel_format == aja::PIXEL_FORMAT_AUTO) {
-    if (supports_abgr && has_csc) {
-      _active_pixel_format = NTV2_FBF_ABGR;
-    } else if (supports_ycbcr) {
+    // Native YUV8 halves the host DMA bandwidth compared with ABGR and is
+    // considerably more reliable at 1080p60 on older cards such as Kona LHi.
+    if (supports_ycbcr8) {
       _active_pixel_format = NTV2_FBF_8BIT_YCBCR;
+    } else if (supports_abgr && has_csc) {
+      _active_pixel_format = NTV2_FBF_ABGR;
+    } else if (supports_ycbcr10) {
+      _active_pixel_format = NTV2_FBF_10BIT_YCBCR;
     } else {
       UtilityFunctions::printerr(
           "[AJAOutput] Device does not support an available output pixel "
@@ -169,13 +240,21 @@ bool AJAOutput::open(int p_device, int p_channel, int64_t p_video_format,
     }
     _active_pixel_format = NTV2_FBF_ABGR;
   } else if (_pixel_format == aja::PIXEL_FORMAT_8BIT_YCBCR) {
-    if (!supports_ycbcr) {
+    if (!supports_ycbcr8) {
       UtilityFunctions::printerr(
           "[AJAOutput] Device does not support 8-bit YCbCr output");
       close();
       return false;
     }
     _active_pixel_format = NTV2_FBF_8BIT_YCBCR;
+  } else if (_pixel_format == aja::PIXEL_FORMAT_10BIT_YCBCR) {
+    if (!supports_ycbcr10) {
+      UtilityFunctions::printerr(
+          "[AJAOutput] Device does not support 10-bit YCbCr output");
+      close();
+      return false;
+    }
+    _active_pixel_format = NTV2_FBF_10BIT_YCBCR;
   } else {
     UtilityFunctions::printerr("[AJAOutput] Unsupported pixel format ",
                                _pixel_format);
@@ -192,59 +271,101 @@ bool AJAOutput::open(int p_device, int p_channel, int64_t p_video_format,
     return false;
   }
 
-  NTV2FormatDescriptor fd(_video_format, _active_pixel_format);
+  NTV2FormatDescriptor fd(_video_format, _active_pixel_format,
+                          NTV2_VANCMODE_OFF);
+  if (!fd.IsValid()) {
+    UtilityFunctions::printerr("[AJAOutput] Invalid format descriptor");
+    close();
+    return false;
+  }
   _width = (int)fd.GetRasterWidth();
-  _height = (int)fd.GetRasterHeight();
+  _height = (int)fd.GetRasterHeight(true);
+  _device_stride = (int)fd.GetBytesPerRow();
+  const size_t transfer_bytes = (size_t)fd.GetTotalBytes();
 
-  _card.DisableChannel(channel);
-  _card.SetVANCMode(NTV2_VANCMODE_OFF, channel);
-  _card.SetVideoFormat(_video_format, false, false, channel);
-  _card.SetFrameBufferFormat(channel, _active_pixel_format);
-  _card.EnableChannel(channel);
-  _card.SubscribeOutputVerticalEvent(channel);
+  _card.DisableChannel(_active_channel);
+  _card.SetVANCMode(NTV2_VANCMODE_OFF, _active_channel);
+  _card.SetVideoFormat(_video_format, false, false, _active_channel);
+  _card.SetFrameBufferFormat(_active_channel, _active_pixel_format);
   _card.SetReference(NTV2_REFERENCE_FREERUN);
+  if (NTV2_OUTPUT_DEST_IS_SDI(_active_output_destination)) {
+    _card.SetSDIOutputStandard(
+        _active_channel, GetNTV2StandardFromVideoFormat(_video_format));
+  }
 
   // Set up signal routing.
   _card.ClearRouting();
 
   const bool is_rgb = (_active_pixel_format == NTV2_FBF_ABGR);
   const NTV2OutputXptID frame_store_output =
-      ::GetFrameStoreOutputXptFromChannel(channel, is_rgb, false);
+      ::GetFrameStoreOutputXptFromChannel(_active_channel, is_rgb, false);
   NTV2OutputXptID video_output = frame_store_output;
 
   if (is_rgb) {
     // FrameStore RGB -> CSC (RGB to YCbCr) -> device outputs.
-    _card.Connect(::GetCSCInputXptFromChannel(channel), frame_store_output);
-    video_output = ::GetCSCOutputXptFromChannel(channel, false, false);
+    _card.Connect(::GetCSCInputXptFromChannel(_active_channel),
+                  frame_store_output);
+    video_output =
+        ::GetCSCOutputXptFromChannel(_active_channel, false, false);
   }
 
-  // Route to the selected SDI output.
-  _card.Connect(::GetSDIOutputInputXpt(channel), video_output);
+  _card.Connect(::GetOutputDestInputXpt(_active_output_destination),
+                video_output);
+  _card.EnableChannel(_active_channel);
+  _card.SubscribeOutputVerticalEvent(_active_channel);
 
-  // HDMI output is a separate destination and must be routed explicitly.
-  // Route the active channel's output to each available HDMI output.
-  const ULWord num_hdmi = _card.features().GetNumHDMIVideoOutputs();
-  for (ULWord i = 0; i < num_hdmi; i++) {
-    _card.Connect(::GetOutputDestInputXpt(
-                      NTV2OutputDestination(NTV2_OUTPUTDESTINATION_HDMI1 + i)),
-                  video_output);
+  if (!_video_converter.prepare(_width, _height, _device_stride,
+                                transfer_bytes, _active_pixel_format)) {
+    UtilityFunctions::printerr("[AJAOutput] Could not prepare video converter");
+    close();
+    return false;
   }
 
-  // Initialise AutoCirculate for output (3 device frame buffers, no audio).
-  _card.AutoCirculateStop(channel);
-  if (!_card.AutoCirculateInitForOutput(channel, 3, NTV2_AUDIOSYSTEM_INVALID,
-                                        0)) {
+  PackedByteArray black;
+  black.resize(_width * _height * 4);
+  uint8_t *black_pixels = black.ptrw();
+  for (int i = 3; i < black.size(); i += 4) {
+    black_pixels[i] = 255;
+  }
+  for (size_t i = 0; i < _transfer_buffers.size(); ++i) {
+    if (!_transfer_buffers[i].Allocate(transfer_bytes, true) ||
+        !_video_converter.convert(
+            black.ptr(), false, _transfer_buffers[i].GetHostPointer(),
+            (size_t)_transfer_buffers[i].GetByteCount())) {
+      UtilityFunctions::printerr(
+          "[AJAOutput] Could not allocate or initialise DMA buffer ",
+          (int64_t)i);
+      close();
+      return false;
+    }
+    _transfer_buffer_locked[i] =
+        _card.DMABufferLock(_transfer_buffers[i], true);
+    if (!_transfer_buffer_locked[i]) {
+      UtilityFunctions::push_warning(
+          "[AJAOutput] Could not page-lock a video DMA buffer; "
+          "high-frame-rate output may drop frames");
+    }
+  }
+
+  _card.AutoCirculateStop(_active_channel);
+  if (!_card.AutoCirculateInitForOutput(
+          _active_channel, DEVICE_FRAME_COUNT, NTV2_AUDIOSYSTEM_INVALID, 0)) {
     UtilityFunctions::printerr(
         "[AJAOutput] AutoCirculateInitForOutput failed for device ", p_device,
-        " channel ", _channel);
+        " channel ", (int64_t)_active_channel);
     close();
     return false;
   }
 
   {
     MutexLock lock(*_output_mutex);
+    ++_readback_generation;
+    _readback_pending = false;
     _latest_rgba.clear();
-    _has_frame = false;
+    _latest_frame_serial = 0;
+    _active_transfer_buffer = 0;
+    _staging_transfer_buffer = 1;
+    _staging_transfer_ready = false;
   }
 
   _open = true;
@@ -252,25 +373,48 @@ bool AJAOutput::open(int p_device, int p_channel, int64_t p_video_format,
 }
 
 void AJAOutput::close() {
+  {
+    MutexLock lock(*_output_mutex);
+    ++_readback_generation;
+    _readback_pending = false;
+  }
   _stop_output_thread();
 
   if (_card.IsOpen()) {
-    const NTV2Channel channel = aja::index_to_channel(_channel);
-    _card.AutoCirculateStop(channel);
-    _card.UnsubscribeOutputVerticalEvent(channel);
-    _card.ReleaseStreamForApplication(aja::kAppSignature,
-                                      int32_t(AJAProcess::GetPid()));
+    if (_acquired) {
+      _card.AutoCirculateStop(_active_channel);
+      for (size_t i = 0; i < _transfer_buffers.size(); ++i) {
+        if (_transfer_buffer_locked[i]) {
+          _card.DMABufferUnlock(_transfer_buffers[i]);
+        }
+      }
+      _card.UnsubscribeOutputVerticalEvent(_active_channel);
+      _card.DisableChannel(_active_channel);
+      _card.ReleaseStreamForApplication(aja::kAppSignature,
+                                        int32_t(AJAProcess::GetPid()));
+    }
     _card.Close();
+  }
+  _acquired = false;
+  _transfer_buffer_locked.fill(false);
+  for (NTV2Buffer &buffer : _transfer_buffers) {
+    buffer.Deallocate();
   }
 
   {
     MutexLock lock(*_output_mutex);
     _latest_rgba.clear();
-    _has_frame = false;
+    _latest_frame_serial = 0;
+    _active_transfer_buffer = 0;
+    _staging_transfer_buffer = 1;
+    _staging_transfer_ready = false;
   }
 
   _open = false;
+  _active_output_destination = NTV2_OUTPUTDESTINATION_INVALID;
+  _active_channel = NTV2_CHANNEL1;
   _active_pixel_format = NTV2_FBF_INVALID;
+  _device_stride = 0;
   _width = 0;
   _height = 0;
 }
@@ -288,6 +432,11 @@ void AJAOutput::set_enabled(bool p_enabled) {
       return;
     }
     _start_output_thread();
+    if (_output_thread.is_null() || !_output_thread->is_started()) {
+      _enabled = false;
+      close();
+      return;
+    }
     _connect_frame_post_draw();
   } else {
     _disconnect_frame_post_draw();
@@ -315,6 +464,24 @@ void AJAOutput::set_channel(int p_channel) {
   _channel = p_channel;
   notify_property_list_changed();
   _restart_if_enabled();
+}
+
+int64_t AJAOutput::get_output_destination() const {
+  return _output_destination;
+}
+
+void AJAOutput::set_output_destination(int64_t p_output_destination) {
+  if (_output_destination == p_output_destination) {
+    return;
+  }
+  _output_destination = p_output_destination;
+  notify_property_list_changed();
+  _restart_if_enabled();
+}
+
+int64_t AJAOutput::get_active_output_destination() const {
+  return _open ? (int64_t)_active_output_destination
+               : (int64_t)aja::OUTPUT_DESTINATION_AUTO;
 }
 
 int64_t AJAOutput::get_video_format() const { return (int64_t)_video_format; }
@@ -386,6 +553,63 @@ void AJAOutput::_capture_texture() {
     return;
   }
 
+  {
+    MutexLock lock(*_output_mutex);
+    if (_readback_pending) {
+      return;
+    }
+  }
+
+  RenderingServer *rs = RenderingServer::get_singleton();
+  RenderingDevice *rd = rs ? rs->get_rendering_device() : nullptr;
+  if (rd && _texture->get_width() == _width &&
+      _texture->get_height() == _height) {
+    const RID rd_texture = rs->texture_get_rd_texture(_texture->get_rid());
+    const Ref<RDTextureFormat> format =
+        rd_texture.is_valid() ? rd->texture_get_format(rd_texture)
+                              : Ref<RDTextureFormat>();
+    if (format.is_valid()) {
+      const RenderingDevice::DataFormat data_format = format->get_format();
+      const bool source_rgba =
+          data_format == RenderingDevice::DATA_FORMAT_R8G8B8A8_UNORM ||
+          data_format == RenderingDevice::DATA_FORMAT_R8G8B8A8_SRGB;
+      const bool source_bgra =
+          data_format == RenderingDevice::DATA_FORMAT_B8G8R8A8_UNORM ||
+          data_format == RenderingDevice::DATA_FORMAT_B8G8R8A8_SRGB;
+      if (source_rgba || source_bgra) {
+        int64_t generation = 0;
+        {
+          MutexLock lock(*_output_mutex);
+          if (!_open || _readback_pending) {
+            return;
+          }
+          _readback_pending = true;
+          generation = _readback_generation;
+        }
+        const Error err = rd->texture_get_data_async(
+            rd_texture, 0,
+            callable_mp(this, &AJAOutput::_on_texture_data)
+                .bind(source_bgra, generation));
+        if (err == OK) {
+          return;
+        }
+        {
+          MutexLock lock(*_output_mutex);
+          if (generation == _readback_generation) {
+            _readback_pending = false;
+          }
+        }
+      }
+    }
+  }
+
+  _capture_texture_synchronously();
+}
+
+void AJAOutput::_capture_texture_synchronously() {
+  if (!_open || _texture.is_null()) {
+    return;
+  }
   Ref<Image> img = _texture->get_image();
   if (img.is_null()) {
     return;
@@ -400,80 +624,122 @@ void AJAOutput::_capture_texture() {
   }
 
   PackedByteArray rgba = frame->get_data();
+  if (rgba.is_empty()) {
+    return;
+  }
+  int64_t generation = 0;
   {
     MutexLock lock(*_output_mutex);
-    _latest_rgba = rgba;
-    _has_frame = !_latest_rgba.is_empty();
+    generation = _readback_generation;
+  }
+  _publish_frame(rgba, false, generation);
+}
+
+void AJAOutput::_on_texture_data(PackedByteArray p_data, bool p_source_bgra,
+                                 int64_t p_generation) {
+  {
+    MutexLock lock(*_output_mutex);
+    if (p_generation != _readback_generation) {
+      return;
+    }
+    _readback_pending = false;
+  }
+  _publish_frame(p_data, p_source_bgra, p_generation);
+}
+
+void AJAOutput::_publish_frame(PackedByteArray p_data, bool p_source_bgra,
+                               int64_t p_generation) {
+  if (p_data.size() < _width * _height * 4) {
+    return;
+  }
+  MutexLock lock(*_output_mutex);
+  if (!_open || !_enabled || p_generation != _readback_generation) {
+    return;
+  }
+  // A single newest-frame slot prevents latency from accumulating when the
+  // renderer is faster than the AJA wire clock.
+  _latest_rgba = p_data;
+  _latest_source_bgra = p_source_bgra;
+  ++_latest_frame_serial;
+}
+
+void AJAOutput::_converter_thread_loop() {
+  OS *os = OS::get_singleton();
+  uint64_t converted_serial = 0;
+
+  while (true) {
+    PackedByteArray rgba;
+    bool source_bgra = false;
+    int staging_buffer = -1;
+    {
+      MutexLock lock(*_output_mutex);
+      if (_thread_stop_requested) {
+        break;
+      }
+      if (!_staging_transfer_ready && !_latest_rgba.is_empty() &&
+          _latest_frame_serial != converted_serial) {
+        rgba = _latest_rgba;
+        source_bgra = _latest_source_bgra;
+        converted_serial = _latest_frame_serial;
+        staging_buffer = _staging_transfer_buffer;
+      }
+    }
+
+    if (staging_buffer < 0) {
+      if (os) {
+        os->delay_usec(1000);
+        continue;
+      }
+      break;
+    }
+
+    NTV2Buffer &buffer = _transfer_buffers[(size_t)staging_buffer];
+    if (_video_converter.convert(rgba.ptr(), source_bgra,
+                                 buffer.GetHostPointer(),
+                                 (size_t)buffer.GetByteCount())) {
+      MutexLock lock(*_output_mutex);
+      if (!_thread_stop_requested &&
+          staging_buffer == _staging_transfer_buffer) {
+        _staging_transfer_ready = true;
+      }
+    }
   }
 }
 
 void AJAOutput::_output_thread_loop() {
-  const NTV2Channel channel = aja::index_to_channel(_channel);
-
   AUTOCIRCULATE_TRANSFER xfer;
-  PackedByteArray transfer_buf;
-  const int bytes_per_pixel = (_active_pixel_format == NTV2_FBF_ABGR) ? 4 : 2;
-  transfer_buf.resize(_width * _height * bytes_per_pixel);
-
-  // Initialize to format-appropriate black so early frames are clean.
-  if (_active_pixel_format == NTV2_FBF_8BIT_YCBCR) {
-    uint8_t *p = reinterpret_cast<uint8_t *>(transfer_buf.ptrw());
-    const int n = _width * _height;
-    for (int i = 0; i < n; i++) {
-      p[i * 2 + 0] = 0x80; // U/V = 128 (neutral chroma)
-      p[i * 2 + 1] = 0x10; // Y = 16 (black in limited range)
-    }
-  }
-  // ABGR: resize() zeroes the buffer; zero ABGR = transparent black → black via
-  // CSC.
-
-  if (!_card.AutoCirculateStart(channel)) {
-    UtilityFunctions::printerr("[AJAOutput] AutoCirculateStart failed");
-    return;
-  }
-
   OS *os = OS::get_singleton();
+  int preroll_frames = 0;
+  bool started = false;
   while (!_is_thread_stop_requested()) {
     AUTOCIRCULATE_STATUS status;
-    _card.AutoCirculateGetStatus(channel, status);
+    _card.AutoCirculateGetStatus(_active_channel, status);
 
     if (status.CanAcceptMoreOutputFrames()) {
-      PackedByteArray rgba;
+      int transfer_buffer = 0;
       {
         MutexLock lock(*_output_mutex);
-        if (_has_frame) {
-          rgba = _latest_rgba;
+        if (_staging_transfer_ready) {
+          std::swap(_active_transfer_buffer, _staging_transfer_buffer);
+          _staging_transfer_ready = false;
         }
+        transfer_buffer = _active_transfer_buffer;
       }
 
-      if (!rgba.is_empty() && rgba.size() >= _width * _height * 4) {
-        const uint8_t *src = rgba.ptr();
-        uint8_t *dst = reinterpret_cast<uint8_t *>(transfer_buf.ptrw());
-
-        if (_active_pixel_format == NTV2_FBF_ABGR) {
-          // Godot RGBA8 (libyuv ABGR) = AJA ABGR. Direct copy.
-          memcpy(dst, src, (size_t)(_width * _height * 4));
-        } else {
-          // Godot RGBA8 (libyuv ABGR) → ARGB (libyuv) → UYVY
-          PackedByteArray argb;
-          argb.resize(_width * _height * 4);
-          uint8_t *argb_ptr = argb.ptrw();
-          if (libyuv::ABGRToARGB(src, _width * 4, argb_ptr, _width * 4, _width,
-                                 _height) != 0 ||
-              libyuv::ARGBToUYVY(argb_ptr, _width * 4, dst, _width * 2, _width,
-                                 _height) != 0) {
-            // Conversion failed; keep previous buffer (last good frame or
-            // black).
+      NTV2Buffer &buffer = _transfer_buffers[(size_t)transfer_buffer];
+      xfer.SetVideoBuffer(reinterpret_cast<PULWord>(buffer.GetHostPointer()),
+                          buffer.GetByteCount());
+      if (_card.AutoCirculateTransfer(_active_channel, xfer) && !started) {
+        ++preroll_frames;
+        if (preroll_frames >= PREROLL_FRAME_COUNT) {
+          if (!_card.AutoCirculateStart(_active_channel)) {
+            UtilityFunctions::printerr(
+                "[AJAOutput] AutoCirculateStart failed");
+            break;
           }
+          started = true;
         }
       }
-
-      // Always submit to prevent AutoCirculate underrun.
-      // If no new frame is ready, transfer_buf holds the last frame or initial
-      // black.
-      xfer.SetVideoBuffer(reinterpret_cast<PULWord>(transfer_buf.ptrw()),
-                          (ULWord)transfer_buf.size());
-      _card.AutoCirculateTransfer(channel, xfer);
     } else if (os) {
       os->delay_usec(1000);
     } else {
@@ -481,7 +747,7 @@ void AJAOutput::_output_thread_loop() {
     }
   }
 
-  _card.AutoCirculateStop(channel);
+  _card.AutoCirculateStop(_active_channel);
 }
 
 void AJAOutput::_start_output_thread() {
@@ -492,29 +758,48 @@ void AJAOutput::_start_output_thread() {
     MutexLock lock(*_output_mutex);
     _thread_stop_requested = false;
   }
+  _converter_thread.instantiate();
+  Error err = _converter_thread->start(
+      callable_mp(this, &AJAOutput::_converter_thread_loop));
+  if (err != OK) {
+    UtilityFunctions::printerr(
+        "[AJAOutput] Could not start converter thread: ", (int64_t)err);
+    _converter_thread.unref();
+    return;
+  }
+
   _output_thread.instantiate();
-  const Error err =
-      _output_thread->start(callable_mp(this, &AJAOutput::_output_thread_loop),
-                            Thread::PRIORITY_HIGH);
+  err = _output_thread->start(
+      callable_mp(this, &AJAOutput::_output_thread_loop), Thread::PRIORITY_HIGH);
   if (err != OK) {
     UtilityFunctions::printerr("[AJAOutput] Could not start output thread: ",
                                (int64_t)err);
     _output_thread.unref();
+    {
+      MutexLock lock(*_output_mutex);
+      _thread_stop_requested = true;
+    }
+    _converter_thread->wait_to_finish();
+    _converter_thread.unref();
   }
 }
 
 void AJAOutput::_stop_output_thread() {
-  if (_output_thread.is_null()) {
+  if (_output_thread.is_null() && _converter_thread.is_null()) {
     return;
   }
   {
     MutexLock lock(*_output_mutex);
     _thread_stop_requested = true;
   }
-  if (_output_thread->is_started()) {
+  if (_output_thread.is_valid() && _output_thread->is_started()) {
     _output_thread->wait_to_finish();
   }
   _output_thread.unref();
+  if (_converter_thread.is_valid() && _converter_thread->is_started()) {
+    _converter_thread->wait_to_finish();
+  }
+  _converter_thread.unref();
 }
 
 bool AJAOutput::_is_thread_stop_requested() const {
@@ -533,6 +818,11 @@ void AJAOutput::_restart_if_enabled() {
     return;
   }
   _start_output_thread();
+  if (_output_thread.is_null() || !_output_thread->is_started()) {
+    _enabled = false;
+    close();
+    return;
+  }
   _connect_frame_post_draw();
 }
 
@@ -576,6 +866,29 @@ String AJAOutput::_get_channel_hint_string() const {
   return hint.is_empty() ? "Channel 1:0" : hint;
 }
 
+String AJAOutput::_get_output_destination_hint_string() const {
+  String hint = "Auto (from channel):" +
+                String::num_int64((int64_t)aja::OUTPUT_DESTINATION_AUTO);
+  AJAVideoSystems *aja = AJAVideoSystems::get_singleton();
+  Ref<AJADevice> device = aja ? aja->get_device(_device) : Ref<AJADevice>();
+  if (device.is_null()) {
+    return hint;
+  }
+  const Array destinations = device->get_output_destinations();
+  for (int i = 0; i < destinations.size(); ++i) {
+    const Dictionary destination = destinations[i];
+    String name = destination.get("name", String());
+    const String type = destination.get("type", String());
+    if (!type.is_empty() && !name.begins_with(type)) {
+      name = type + String(" ") + name;
+    }
+    name = name.replace(",", " ").replace(":", " ");
+    hint += "," + name + ":" +
+            String::num_int64(destination.get("id", (int64_t)0));
+  }
+  return hint;
+}
+
 String AJAOutput::_get_video_format_hint_string() const {
   AJAVideoSystems *aja = AJAVideoSystems::get_singleton();
   Ref<AJADevice> device = aja ? aja->get_device(_device) : Ref<AJADevice>();
@@ -606,13 +919,15 @@ String AJAOutput::_get_video_format_hint_string() const {
 }
 
 String AJAOutput::_get_pixel_format_hint_string() const {
-  String hint = "Auto (prefer ABGR):" +
+  String hint = "Auto (prefer YUV8):" +
                 String::num_int64((int64_t)aja::PIXEL_FORMAT_AUTO);
   AJAVideoSystems *aja = AJAVideoSystems::get_singleton();
   Ref<AJADevice> device = aja ? aja->get_device(_device) : Ref<AJADevice>();
   if (device.is_null()) {
     hint += ",8-bit YCbCr (UYVY):" +
             String::num_int64((int64_t)aja::PIXEL_FORMAT_8BIT_YCBCR);
+    hint += ",10-bit YCbCr (v210):" +
+            String::num_int64((int64_t)aja::PIXEL_FORMAT_10BIT_YCBCR);
     hint += ",ABGR:" + String::num_int64((int64_t)aja::PIXEL_FORMAT_ABGR);
     return hint;
   }
@@ -621,7 +936,7 @@ String AJAOutput::_get_pixel_format_hint_string() const {
   for (int i = 0; i < formats.size(); ++i) {
     const Dictionary format = formats[i];
     const int64_t id = format.get("id", (int64_t)aja::PIXEL_FORMAT_AUTO);
-    if (!device->can_output_pixel_format(_channel, id)) {
+    if (!device->can_output_pixel_format(_get_pixel_format_channel(), id)) {
       continue;
     }
     String name = format.get("name", String());
@@ -629,4 +944,15 @@ String AJAOutput::_get_pixel_format_hint_string() const {
     hint += "," + name + ":" + String::num_int64(id);
   }
   return hint;
+}
+
+int AJAOutput::_get_pixel_format_channel() const {
+  if (_output_destination != aja::OUTPUT_DESTINATION_AUTO) {
+    const NTV2OutputDestination destination =
+        (NTV2OutputDestination)_output_destination;
+    if (NTV2_IS_VALID_OUTPUT_DEST(destination)) {
+      return (int)NTV2OutputDestinationToChannel(destination);
+    }
+  }
+  return _channel;
 }

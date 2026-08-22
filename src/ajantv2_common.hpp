@@ -17,7 +17,12 @@ namespace aja {
 enum PixelFormat {
   PIXEL_FORMAT_AUTO = -1,
   PIXEL_FORMAT_8BIT_YCBCR = NTV2_FBF_8BIT_YCBCR,
+  PIXEL_FORMAT_10BIT_YCBCR = NTV2_FBF_10BIT_YCBCR,
   PIXEL_FORMAT_ABGR = NTV2_FBF_ABGR,
+};
+
+enum OutputDestination {
+  OUTPUT_DESTINATION_AUTO = -1,
 };
 
 // App signature used when acquiring exclusive device access.
@@ -45,3 +50,4 @@ inline NTV2InputSource channel_to_input_source(NTV2Channel p_channel) {
 } // namespace godot
 
 VARIANT_ENUM_CAST(godot::aja::PixelFormat);
+VARIANT_ENUM_CAST(godot::aja::OutputDestination);

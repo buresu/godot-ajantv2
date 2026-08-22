@@ -27,6 +27,8 @@ void AJADevice::_bind_methods() {
                        &AJADevice::get_video_formats);
   ClassDB::bind_method(D_METHOD("get_pixel_formats"),
                        &AJADevice::get_pixel_formats);
+  ClassDB::bind_method(D_METHOD("get_output_destinations"),
+                       &AJADevice::get_output_destinations);
   ClassDB::bind_method(
       D_METHOD("can_output_pixel_format", "channel", "pixel_format"),
       &AJADevice::can_output_pixel_format);
@@ -48,6 +50,8 @@ void AJADevice::setup(ULWord p_device_index) {
   _can_playback = card.features().CanDoPlayback();
   _supports_8bit_ycbcr =
       card.features().CanDoFrameBufferFormat(NTV2_FBF_8BIT_YCBCR);
+  _supports_10bit_ycbcr =
+      card.features().CanDoFrameBufferFormat(NTV2_FBF_10BIT_YCBCR);
   _supports_abgr = card.features().CanDoFrameBufferFormat(NTV2_FBF_ABGR);
   _num_cscs = (int)card.features().GetNumCSCs();
 
@@ -63,7 +67,27 @@ void AJADevice::setup(ULWord p_device_index) {
     d["width"] = (int64_t)fd.GetRasterWidth();
     d["height"] = (int64_t)fd.GetRasterHeight();
     d["progressive"] = (bool)IsProgressivePicture(fmt);
+    d["frame_rate"] =
+        ::GetFramesPerSecond(::GetNTV2FrameRateFromVideoFormat(fmt));
     _video_formats.push_back(d);
+  }
+
+  NTV2OutputDestinations destinations;
+  NTV2DeviceGetSupportedOutputDests(card.GetDeviceID(), destinations);
+  _output_destinations.clear();
+  for (const NTV2OutputDestination destination : destinations) {
+    if (!NTV2_OUTPUT_DEST_IS_SDI(destination) &&
+        !NTV2_OUTPUT_DEST_IS_HDMI(destination)) {
+      continue;
+    }
+    Dictionary d;
+    d["id"] = (int64_t)destination;
+    d["name"] =
+        aja::string_to_godot(NTV2OutputDestinationToString(destination, true));
+    d["channel"] =
+        (int64_t)NTV2OutputDestinationToChannel(destination);
+    d["type"] = NTV2_OUTPUT_DEST_IS_HDMI(destination) ? "HDMI" : "SDI";
+    _output_destinations.push_back(d);
   }
 }
 
@@ -102,6 +126,12 @@ Array AJADevice::get_pixel_formats() const {
     ycbcr["name"] = "8-bit YCbCr (UYVY)";
     formats.push_back(ycbcr);
   }
+  if (_supports_10bit_ycbcr) {
+    Dictionary ycbcr;
+    ycbcr["id"] = (int64_t)NTV2_FBF_10BIT_YCBCR;
+    ycbcr["name"] = "10-bit YCbCr (v210)";
+    formats.push_back(ycbcr);
+  }
   if (_supports_abgr) {
     Dictionary abgr;
     abgr["id"] = (int64_t)NTV2_FBF_ABGR;
@@ -111,14 +141,22 @@ Array AJADevice::get_pixel_formats() const {
   return formats;
 }
 
+Array AJADevice::get_output_destinations() const {
+  return _output_destinations;
+}
+
 bool AJADevice::can_output_pixel_format(int p_channel,
                                         int64_t p_pixel_format) const {
   if (p_pixel_format == aja::PIXEL_FORMAT_AUTO) {
     return _supports_8bit_ycbcr ||
-           (_supports_abgr && p_channel >= 0 && p_channel < _num_cscs);
+           (_supports_abgr && p_channel >= 0 && p_channel < _num_cscs) ||
+           _supports_10bit_ycbcr;
   }
   if (p_pixel_format == aja::PIXEL_FORMAT_8BIT_YCBCR) {
     return _supports_8bit_ycbcr;
+  }
+  if (p_pixel_format == aja::PIXEL_FORMAT_10BIT_YCBCR) {
+    return _supports_10bit_ycbcr;
   }
   if (p_pixel_format == aja::PIXEL_FORMAT_ABGR) {
     return _supports_abgr && p_channel >= 0 && p_channel < _num_cscs;

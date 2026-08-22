@@ -20,7 +20,12 @@ public:
   static constexpr PixelFormat PIXEL_FORMAT_AUTO = aja::PIXEL_FORMAT_AUTO;
   static constexpr PixelFormat PIXEL_FORMAT_8BIT_YCBCR =
       aja::PIXEL_FORMAT_8BIT_YCBCR;
+  static constexpr PixelFormat PIXEL_FORMAT_10BIT_YCBCR =
+      aja::PIXEL_FORMAT_10BIT_YCBCR;
   static constexpr PixelFormat PIXEL_FORMAT_ABGR = aja::PIXEL_FORMAT_ABGR;
+  using OutputDestination = aja::OutputDestination;
+  static constexpr OutputDestination OUTPUT_DESTINATION_AUTO =
+      aja::OUTPUT_DESTINATION_AUTO;
 
   static AJAVideoSystems *get_singleton();
 
@@ -33,6 +38,7 @@ public:
   Ref<AJADevice> get_device(int p_index) const;
   Array get_video_formats(int p_device_index) const;
   Array get_pixel_formats(int p_device_index) const;
+  Array get_output_destinations(int p_device_index) const;
 
 protected:
   static void _bind_methods();
